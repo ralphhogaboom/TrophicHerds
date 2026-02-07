@@ -1,4 +1,13 @@
 name: TrophicHerds
 main: com.hideyourfire.trophicherds.TrophicHerds
-version: 26.0115.1
+version: 260.205.17
 api-version: "1.21"
+commands:
+  th:
+    description: TrophicHerds admin commands
+    usage: /th <herdcount|debug>
+    permission: trophicherds.admin
+permissions:
+  trophicherds.admin:
+    description: Allows use of TrophicHerds admin commands
+    default: op
