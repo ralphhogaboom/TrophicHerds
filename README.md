@@ -4,4 +4,4 @@ Herbivores no longer ignore others; now they run from players, villagers, and ho
 
 This plugin helps nerf mob farms; now players must give animals space or they won't breed. It takes away player breeding, making animal farming more natural and less focused on game mechanics.
 
-[![Trophic Herds](https://img.youtube.com/vi/-YyfTX5XkvczMPYn/0.jpg)](https://www.youtube.com/watch?v=-YyfTX5XkvczMPYn)
+[![Watch the video - Trophic Herds](https://img.youtube.com/vi/p-_gOXy-Ye8/0.jpg)](https://www.youtube.com/watch?v=p-_gOXy-Ye8)
