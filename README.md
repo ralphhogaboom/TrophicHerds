@@ -1,3 +1,7 @@
-Trophic Herds changes herbivore behavior to be much more natural.
+Trophic Herds changes herbivore behavior to be much more natural, with more realistic animal behavior in Minecraft Paper servers. Cows, sheep, pigs, rabbits, chickens self-gather in herds or flocks, grazing and wandering throughout the day. At night, the herd pulls close for protection.
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/p-_gOXy-Ye8?si=-YyfTX5XkvczMPYn" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+Herbivores no longer ignore others; now they run from players, villagers, and hostile mobs; the reproduce on their own, if they have access to open grassland and clean water. They have full life cycles - herds have a certain size to which they grow, and adult herd members are born, they live, then die of old age.
+
+This plugin helps nerf mob farms; now players must give animals space or they won't breed. It takes away player breeding, making animal farming more natural and less focused on game mechanics.
+
+[![Trophic Herds](https://img.youtube.com/vi/-YyfTX5XkvczMPYn/0.jpg)](https://www.youtube.com/watch?v=-YyfTX5XkvczMPYn)
