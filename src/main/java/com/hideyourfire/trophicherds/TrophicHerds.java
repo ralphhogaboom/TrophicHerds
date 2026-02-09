@@ -14,6 +14,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.HeightMap;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.SoundCategory;
 import org.bukkit.World;
 import org.bukkit.block.Biome;
 import org.bukkit.Chunk;
@@ -28,31 +30,45 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Goat;
 import org.bukkit.entity.Horse;
 import org.bukkit.entity.Ageable;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Mob;
+import org.bukkit.entity.Ocelot;
+import org.bukkit.entity.Pig;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Rabbit;
 import org.bukkit.entity.Sheep;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityBreedEvent;
+import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
+import org.bukkit.event.player.PlayerToggleSprintEvent;
+import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 import com.destroystokyo.paper.event.entity.EntityPathfindEvent;
 
 public final class TrophicHerds extends JavaPlugin {
+  private static final String CULL_METADATA_KEY = "trophicherds_cull";
+  private static final double CULL_DEATH_SOUND_RADIUS = 24.0;
   private static final List<MobKind<? extends Mob>> SUPPORTED_MOBS = List.of(
       new MobKind<>(EntityType.COW, Cow.class, "cow"),
+      new MobKind<>(EntityType.PIG, Pig.class, "pig"),
       new MobKind<>(EntityType.HORSE, Horse.class, "horse"),
       new MobKind<>(EntityType.SHEEP, Sheep.class, "sheep"),
       new MobKind<>(EntityType.CHICKEN, Chicken.class, "chicken"),
-      new MobKind<>(EntityType.GOAT, Goat.class, "goat"));
+      new MobKind<>(EntityType.GOAT, Goat.class, "goat"),
+      new MobKind<>(EntityType.OCELOT, Ocelot.class, "ocelot"),
+      new MobKind<>(EntityType.RABBIT, Rabbit.class, "rabbit"));
 
   private Settings settings;
   private boolean debugEnabled;
   private BukkitTask herdTask;
+  private BukkitTask hazardTask;
   private final HerdManager herdManager = new HerdManager();
+  private final HazardManager hazardManager = new HazardManager();
   private static final double HERDCOUNT_RADIUS = 128.0;
   private static final int HERDCOUNT_MIN_POPULATION = 2;
 
@@ -60,9 +76,10 @@ public final class TrophicHerds extends JavaPlugin {
   public void onEnable() {
     saveDefaultConfig();
     this.settings = Settings.fromConfig(getConfig());
-    this.debugEnabled = getConfig().getBoolean("debug", false);
+    this.debugEnabled = false;
     getServer().getPluginManager().registerEvents(new PredatorListener(), this);
     scheduleHerdManagement();
+    scheduleHazardCacheMaintenance();
   }
 
   @Override
@@ -71,7 +88,10 @@ public final class TrophicHerds extends JavaPlugin {
       herdTask.cancel();
       herdTask = null;
     }
-    saveConfig();
+    if (hazardTask != null) {
+      hazardTask.cancel();
+      hazardTask = null;
+    }
   }
 
   private void scheduleHerdManagement() {
@@ -80,6 +100,14 @@ public final class TrophicHerds extends JavaPlugin {
         this::tickHerds,
         1L,
         1L);
+  }
+
+  private void scheduleHazardCacheMaintenance() {
+    hazardTask = Bukkit.getScheduler().runTaskTimer(
+        this,
+        hazardManager::refreshCaches,
+        40L,
+        200L);
   }
 
   private void tickHerds() {
@@ -166,8 +194,8 @@ public final class TrophicHerds extends JavaPlugin {
       sender.sendMessage("Usage: /th debug <true|false>");
       return true;
     }
-    if (sender instanceof Player player && !player.isOp()) {
-      sender.sendMessage("You must be an operator to use this command.");
+    if (sender instanceof Player player && !player.hasPermission("trophicherds.admin")) {
+      sender.sendMessage("You do not have permission to use this command.");
       return true;
     }
     String value = args[1].trim().toLowerCase(Locale.ROOT);
@@ -177,16 +205,15 @@ public final class TrophicHerds extends JavaPlugin {
     }
     boolean enabled = Boolean.parseBoolean(value);
     debugEnabled = enabled;
-    getConfig().set("debug", enabled);
     sender.sendMessage("TrophicHerds debug is now " + (enabled ? "enabled" : "disabled") + ".");
     return true;
   }
 
   private void logCullingEvent(String message) {
-    getLogger().info(message);
     if (!debugEnabled) {
       return;
     }
+    getLogger().info(message);
     for (Player player : Bukkit.getOnlinePlayers()) {
       if (player.isOp()) {
         player.sendMessage(message);
@@ -271,6 +298,7 @@ public final class TrophicHerds extends JavaPlugin {
     private final int overcapIntervalTicks;
     private final int overcapRemovalsPerInterval;
     private final int minHerdSize;
+    private final int minBiomePopulation;
     private final int densityThrottleThreshold;
     private final double densityThrottleChancePerMob;
     private final double densityThrottleMaxChance;
@@ -278,6 +306,10 @@ public final class TrophicHerds extends JavaPlugin {
     private final double reproduceSpacing;
     private final double reproduceRate;
     private final int reproduceCooldownTicks;
+    private final boolean reproduceNeedsWater;
+    private final double nightHerdSpeedMultiplier;
+    private final double dayHerdSpeedMultiplier;
+    private final boolean cullPlayDeathSound;
 
     private MobSettings(
         double awarenessDistance,
@@ -297,13 +329,18 @@ public final class TrophicHerds extends JavaPlugin {
         int overcapIntervalTicks,
         int overcapRemovalsPerInterval,
         int minHerdSize,
+        int minBiomePopulation,
         int densityThrottleThreshold,
         double densityThrottleChancePerMob,
         double densityThrottleMaxChance,
         boolean reproduceEnabled,
         double reproduceSpacing,
         double reproduceRate,
-        int reproduceCooldownTicks) {
+        int reproduceCooldownTicks,
+        boolean reproduceNeedsWater,
+        double nightHerdSpeedMultiplier,
+        double dayHerdSpeedMultiplier,
+        boolean cullPlayDeathSound) {
       this.awarenessDistance = awarenessDistance;
       this.herdRadius = herdRadius;
       this.herdUpdateIntervalTicks = herdUpdateIntervalTicks;
@@ -321,6 +358,7 @@ public final class TrophicHerds extends JavaPlugin {
       this.overcapIntervalTicks = overcapIntervalTicks;
       this.overcapRemovalsPerInterval = overcapRemovalsPerInterval;
       this.minHerdSize = minHerdSize;
+      this.minBiomePopulation = minBiomePopulation;
       this.densityThrottleThreshold = densityThrottleThreshold;
       this.densityThrottleChancePerMob = densityThrottleChancePerMob;
       this.densityThrottleMaxChance = densityThrottleMaxChance;
@@ -328,6 +366,10 @@ public final class TrophicHerds extends JavaPlugin {
       this.reproduceSpacing = reproduceSpacing;
       this.reproduceRate = reproduceRate;
       this.reproduceCooldownTicks = reproduceCooldownTicks;
+      this.reproduceNeedsWater = reproduceNeedsWater;
+      this.nightHerdSpeedMultiplier = nightHerdSpeedMultiplier;
+      this.dayHerdSpeedMultiplier = dayHerdSpeedMultiplier;
+      this.cullPlayDeathSound = cullPlayDeathSound;
     }
 
     private static MobSettings fromConfig(FileConfiguration config, String basePath) {
@@ -368,6 +410,7 @@ public final class TrophicHerds extends JavaPlugin {
       int overcapRemovalsPerInterval =
           Math.max(0, config.getInt(basePath + ".overcap-removals-per-interval", 0));
       int minHerdSize = Math.max(0, config.getInt(basePath + ".min-herd-size", 2));
+      int minBiomePopulation = Math.max(0, config.getInt(basePath + ".min-biome-population", 0));
       int densityThrottleThreshold =
           Math.max(0, config.getInt(basePath + ".density-throttle-threshold", 0));
       double densityThrottleChancePerMob =
@@ -379,6 +422,13 @@ public final class TrophicHerds extends JavaPlugin {
       double reproduceRate = Math.max(0.0, config.getDouble(basePath + ".reproduce-rate", 0.0));
       int reproduceCooldownTicks =
           Math.max(0, config.getInt(basePath + ".reproduce-cooldown-ticks", 6000));
+      boolean reproduceNeedsWater =
+          config.getBoolean(basePath + ".reproduce-needs-water", true);
+      double nightHerdSpeedMultiplier =
+          Math.max(0.0, config.getDouble(basePath + ".night-herd-speed-multiplier", 1.0));
+      double dayHerdSpeedMultiplier =
+          Math.max(0.0, config.getDouble(basePath + ".day-herd-speed-multiplier", 1.0));
+      boolean cullPlayDeathSound = config.getBoolean(basePath + ".cull-play-death-sound", true);
       return new MobSettings(
           Math.max(0.0, awarenessDistance),
           Math.max(0.0, herdRadius),
@@ -397,13 +447,18 @@ public final class TrophicHerds extends JavaPlugin {
           overcapIntervalTicks,
           overcapRemovalsPerInterval,
           minHerdSize,
+          minBiomePopulation,
           densityThrottleThreshold,
           densityThrottleChancePerMob,
           densityThrottleMaxChance,
           reproduceEnabled,
           reproduceSpacing,
           reproduceRate,
-          reproduceCooldownTicks);
+          reproduceCooldownTicks,
+          reproduceNeedsWater,
+          nightHerdSpeedMultiplier,
+          dayHerdSpeedMultiplier,
+          cullPlayDeathSound);
     }
 
     private static double getDouble(
@@ -519,6 +574,7 @@ public final class TrophicHerds extends JavaPlugin {
     private static final double DAY_MEMBER_WANDER_CHANCE = 0.18;
     private static final double DAY_MEMBER_WANDER_RADIUS_MULTIPLIER = 1.6;
     private static final int DAY_MEMBER_WANDER_GRACE_TICKS = 120;
+    private static final double WATER_ESCAPE_SPEED_MULTIPLIER = 1.35;
     private static final java.util.EnumSet<Material> NATURAL_BREEDING_BLOCKS =
         java.util.EnumSet.of(
             Material.GRASS_BLOCK,
@@ -550,6 +606,12 @@ public final class TrophicHerds extends JavaPlugin {
       List<HerdSnapshot> newSnapshots = new ArrayList<>();
 
       boolean day = isDay(world);
+      double moveSpeed = config.settings.fleeSpeed;
+      if (!day) {
+        moveSpeed *= config.settings.nightHerdSpeedMultiplier;
+      } else {
+        moveSpeed *= config.settings.dayHerdSpeedMultiplier;
+      }
       for (HerdCluster cluster : clusters) {
         Mob leader = electLeader(cluster, cache);
         if (leader == null) {
@@ -560,6 +622,9 @@ public final class TrophicHerds extends JavaPlugin {
         newLeaderFollowerCounts.put(leaderId, cluster.members.size());
         Location leaderLocation = leader.getLocation();
         HerdType herdType = config.settings.herdType;
+        if (!day) {
+          herdType = HerdType.TIGHT;
+        }
         double baseRadius = config.settings.herdRadius;
         double followRadius = baseRadius;
         if (herdType == HerdType.TIGHT) {
@@ -585,15 +650,24 @@ public final class TrophicHerds extends JavaPlugin {
           }
           newMemberToLeader.put(member.getUniqueId(), leaderId);
         }
-        if (threat != null) {
+        if (threat != null && day) {
           fleeFromPredator(cluster, threat, config.settings);
           continue;
+        }
+        if (day && shouldMoveHerdAwayFromWater(cluster)) {
+          Location dryTarget = resolveDryTarget(leaderLocation, config.settings.awarenessDistance);
+          if (dryTarget != null) {
+            leader.getPathfinder().moveTo(
+                dryTarget,
+                moveSpeed * WATER_ESCAPE_SPEED_MULTIPLIER);
+            continue;
+          }
         }
         if (day && random.nextDouble() < DAY_LEADER_WANDER_CHANCE) {
           double leaderWanderRadius = followRadius * DAY_LEADER_WANDER_RADIUS_MULTIPLIER;
           Location wanderTarget = resolveDayWanderTarget(leaderLocation, leaderWanderRadius);
           if (wanderTarget != null) {
-            leader.getPathfinder().moveTo(wanderTarget, config.settings.fleeSpeed);
+            leader.getPathfinder().moveTo(wanderTarget, moveSpeed);
           }
         }
         applyPopulationControl(
@@ -632,7 +706,7 @@ public final class TrophicHerds extends JavaPlugin {
             double roamRadius = followRadius * DAY_MEMBER_WANDER_RADIUS_MULTIPLIER;
             Location wanderTarget = resolveDayWanderTarget(leaderLocation, roamRadius);
             if (wanderTarget != null) {
-              member.getPathfinder().moveTo(wanderTarget, config.settings.fleeSpeed);
+              member.getPathfinder().moveTo(wanderTarget, moveSpeed);
               cache.lastMemberWanderTicks.put(memberId, currentTick);
               continue;
             }
@@ -650,11 +724,11 @@ public final class TrophicHerds extends JavaPlugin {
               target = leaderLocation;
             }
             if (target != null) {
-              member.getPathfinder().moveTo(target, config.settings.fleeSpeed);
+              member.getPathfinder().moveTo(target, moveSpeed);
             }
           }
         }
-        handleLeaderGrazing(world, leader, cluster, config, cache, currentTick);
+        handleLeaderGrazing(world, leader, cluster, config, cache, currentTick, moveSpeed);
       }
 
       cache.memberToLeader = newMemberToLeader;
@@ -902,7 +976,8 @@ public final class TrophicHerds extends JavaPlugin {
         HerdCluster cluster,
         MobTypeConfig<? extends Mob> config,
         HerdCache cache,
-        int currentTick) {
+        int currentTick,
+        double moveSpeed) {
       if (leader == null || !leader.isValid()) {
         return;
       }
@@ -913,7 +988,7 @@ public final class TrophicHerds extends JavaPlugin {
       if (grazeTarget == null) {
         return;
       }
-      leader.getPathfinder().moveTo(grazeTarget, config.settings.fleeSpeed);
+      leader.getPathfinder().moveTo(grazeTarget, moveSpeed);
       if (!isGrazeWindowOpen(world)) {
         return;
       }
@@ -980,13 +1055,13 @@ public final class TrophicHerds extends JavaPlugin {
             if (!settings.predators.contains(type)) {
               continue;
             }
-            if (entity instanceof Player player && (!isSurvivalPlayer(player) || player.isDead())) {
-              logIgnoredPredator(player, "predator threat scan");
-              continue;
-            }
-            double distanceSq = leaderLocation.distanceSquared(entity.getLocation());
-            if (distanceSq > bestDistanceSq) {
-              continue;
+        if (entity instanceof Player player && (!isSurvivalPlayer(player) || player.isDead())) {
+          logIgnoredPredator(player, "predator threat scan");
+          continue;
+        }
+        double distanceSq = leaderLocation.distanceSquared(entity.getLocation());
+        if (distanceSq > bestDistanceSq) {
+          continue;
             }
             bestDistanceSq = distanceSq;
             bestLocation = entity.getLocation();
@@ -1047,11 +1122,29 @@ public final class TrophicHerds extends JavaPlugin {
           entry -> currentTick - entry.getValue().lastScanTick > staleAfter);
     }
 
+    private void invalidatePredatorChunk(World world, int chunkX, int chunkZ) {
+      if (world == null) {
+        return;
+      }
+      UUID worldId = world.getUID();
+      predatorChunkCache.entrySet().removeIf(
+          entry -> entry.getKey().worldId.equals(worldId)
+              && entry.getKey().chunkX == chunkX
+              && entry.getKey().chunkZ == chunkZ);
+    }
+
     private void fleeFromPredator(
         HerdCluster cluster,
         PredatorThreat threat,
         MobSettings settings) {
       if (cluster == null || threat == null) {
+        return;
+      }
+      World world = null;
+      if (!cluster.members.isEmpty() && cluster.members.get(0) != null) {
+        world = cluster.members.get(0).getWorld();
+      }
+      if (world != null && !isDay(world)) {
         return;
       }
       double awareness = settings.awarenessDistance;
@@ -1081,10 +1174,57 @@ public final class TrophicHerds extends JavaPlugin {
               0.0,
               random.nextDouble(-1.0, 1.0));
         }
-        Location target = memberLocation.clone()
-            .add(away.normalize().multiply(awareness));
+        Location target = resolveSafeFleeTarget(memberLocation, away, awareness);
         member.getPathfinder().moveTo(target, speed);
       }
+    }
+
+    private Location resolveSafeFleeTarget(
+        Location origin,
+        org.bukkit.util.Vector away,
+        double awareness) {
+      if (origin == null || away == null) {
+        return origin;
+      }
+      if (awareness <= 0.0) {
+        return origin;
+      }
+      org.bukkit.util.Vector base = away.clone();
+      if (base.lengthSquared() < 0.001) {
+        return origin;
+      }
+      base = base.normalize();
+      double[] distances = new double[] {awareness, awareness * 0.65, awareness * 0.4};
+      double[] angles = new double[] {0.0, 0.35, -0.35, 0.7, -0.7};
+      Location bestSafe = null;
+      int bestSafeScore = Integer.MAX_VALUE;
+      Location bestOverall = null;
+      int bestOverallScore = Integer.MAX_VALUE;
+      for (double distance : distances) {
+        for (double angle : angles) {
+          org.bukkit.util.Vector rotated = rotateAroundY(base, angle);
+          Location candidate = origin.clone().add(rotated.multiply(distance));
+          candidate.setY(origin.getY());
+          int score = hazardManager.scoreAt(candidate);
+          if (score < bestOverallScore) {
+            bestOverallScore = score;
+            bestOverall = candidate;
+          }
+          if (score < HazardManager.MUST_AVOID_SCORE && score < bestSafeScore) {
+            bestSafeScore = score;
+            bestSafe = candidate;
+          }
+        }
+      }
+      return bestSafe != null ? bestSafe : bestOverall != null ? bestOverall : origin;
+    }
+
+    private org.bukkit.util.Vector rotateAroundY(org.bukkit.util.Vector vector, double radians) {
+      double cos = Math.cos(radians);
+      double sin = Math.sin(radians);
+      double x = vector.getX() * cos - vector.getZ() * sin;
+      double z = vector.getX() * sin + vector.getZ() * cos;
+      return new org.bukkit.util.Vector(x, vector.getY(), z);
     }
 
     private void triggerImmediateFlee(
@@ -1173,6 +1313,11 @@ public final class TrophicHerds extends JavaPlugin {
       if (cluster == null || leader == null || !leader.isValid()) {
         return;
       }
+      Biome leaderBiome = leader.getLocation().getBlock().getBiome();
+      int biomeCount = biomeCounts.getOrDefault(leaderBiome, 0);
+      if (settings.minBiomePopulation > 0 && biomeCount <= settings.minBiomePopulation) {
+        return;
+      }
       int clusterSize = cluster.members.size();
       if (clusterSize <= settings.minHerdSize) {
         return;
@@ -1190,7 +1335,7 @@ public final class TrophicHerds extends JavaPlugin {
             cluster,
             leader.getUniqueId(),
             softCapPlan.removals,
-            settings.minHerdSize,
+            settings,
             biomeCounts,
             chunkCounts);
         if (removed > 0) {
@@ -1230,7 +1375,7 @@ public final class TrophicHerds extends JavaPlugin {
           cluster,
           leader.getUniqueId(),
           1,
-          settings.minHerdSize,
+          settings,
           biomeCounts,
           chunkCounts);
       if (removed > 0) {
@@ -1319,6 +1464,9 @@ public final class TrophicHerds extends JavaPlugin {
       if (isInWater(member)) {
         return false;
       }
+      if (settings.reproduceNeedsWater && !hasWaterAccess(member, settings)) {
+        return false;
+      }
       if (!isOnNaturalSurface(member.getLocation())) {
         return false;
       }
@@ -1330,10 +1478,201 @@ public final class TrophicHerds extends JavaPlugin {
       return currentTick - lastTick >= cooldown;
     }
 
+    private boolean hasWaterAccess(Mob member, MobSettings settings) {
+      if (member == null || !member.isValid()) {
+        return false;
+      }
+      if (isInWater(member)) {
+        return true;
+      }
+      Location origin = member.getLocation();
+      if (origin == null) {
+        return false;
+      }
+      World world = origin.getWorld();
+      if (world == null) {
+        return false;
+      }
+      double radius = Math.max(6.0, settings.awarenessDistance);
+      Location waterTarget = findReachableWaterTarget(world, origin, radius);
+      if (waterTarget != null) {
+        return true;
+      }
+      return hasOpenEscapeRoute(world, origin, radius);
+    }
+
+    private Location findReachableWaterTarget(World world, Location origin, double radius) {
+      int samples = 10;
+      double originX = origin.getX();
+      double originZ = origin.getZ();
+      double y = origin.getY();
+      for (int i = 0; i < samples; i++) {
+        double angle = random.nextDouble(0.0, Math.PI * 2.0);
+        double distance = random.nextDouble(0.2, 1.0) * radius;
+        int x = (int) Math.round(originX + Math.cos(angle) * distance);
+        int z = (int) Math.round(originZ + Math.sin(angle) * distance);
+        int surfaceY = world.getHighestBlockYAt(x, z, HeightMap.MOTION_BLOCKING_NO_LEAVES);
+        var surface = world.getBlockAt(x, surfaceY, z);
+        Location waterLocation = null;
+        if (surface.getType() == Material.WATER) {
+          waterLocation = surface.getLocation();
+        } else {
+          var oceanFloor = world.getHighestBlockAt(x, z, HeightMap.OCEAN_FLOOR);
+          var above = oceanFloor.getRelative(org.bukkit.block.BlockFace.UP);
+          if (above.getType() == Material.WATER) {
+            waterLocation = above.getLocation();
+          }
+        }
+        if (waterLocation != null) {
+          Location target = new Location(world, waterLocation.getX(), y, waterLocation.getZ());
+          if (hasClearPath(world, origin, target)) {
+            return target;
+          }
+        }
+      }
+      return null;
+    }
+
+    private boolean hasOpenEscapeRoute(World world, Location origin, double radius) {
+      int samples = 12;
+      double originX = origin.getX();
+      double originZ = origin.getZ();
+      double y = origin.getY();
+      for (int i = 0; i < samples; i++) {
+        double angle = (Math.PI * 2.0) * i / samples;
+        int x = (int) Math.round(originX + Math.cos(angle) * radius);
+        int z = (int) Math.round(originZ + Math.sin(angle) * radius);
+        Location target = new Location(world, x, y, z);
+        if (isWalkableSurface(world, target) && hasClearPath(world, origin, target)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    private boolean hasClearPath(World world, Location start, Location end) {
+      if (world == null || start == null || end == null) {
+        return false;
+      }
+      double dx = end.getX() - start.getX();
+      double dz = end.getZ() - start.getZ();
+      double steps = Math.max(Math.abs(dx), Math.abs(dz));
+      if (steps < 1.0) {
+        return true;
+      }
+      double stepX = dx / steps;
+      double stepZ = dz / steps;
+      double x = start.getX();
+      double z = start.getZ();
+      int y = (int) Math.round(start.getY());
+      for (int i = 0; i <= (int) steps; i++) {
+        int bx = (int) Math.round(x);
+        int bz = (int) Math.round(z);
+        var block = world.getBlockAt(bx, y, bz);
+        if (isBarrierBlock(block.getType())) {
+          return false;
+        }
+        var above = block.getRelative(org.bukkit.block.BlockFace.UP);
+        if (!block.isPassable() && !block.getType().isAir()) {
+          return false;
+        }
+        if (!above.isPassable() && !above.getType().isAir()) {
+          return false;
+        }
+        x += stepX;
+        z += stepZ;
+      }
+      return true;
+    }
+
+    private boolean isWalkableSurface(World world, Location location) {
+      if (world == null || location == null) {
+        return false;
+      }
+      var block = world.getBlockAt(location);
+      var below = block.getRelative(org.bukkit.block.BlockFace.DOWN);
+      return below.getType().isSolid()
+          && block.isPassable()
+          && block.getRelative(org.bukkit.block.BlockFace.UP).isPassable();
+    }
+
+    private boolean isBarrierBlock(Material material) {
+      if (material == null) {
+        return false;
+      }
+      String name = material.name();
+      return name.contains("FENCE")
+          || name.contains("WALL")
+          || name.contains("GATE")
+          || name.contains("BARRIER");
+    }
+
     private boolean isInWater(Mob member) {
       Location location = member.getLocation();
       return location.getBlock().isLiquid()
           || location.getBlock().getRelative(org.bukkit.block.BlockFace.DOWN).isLiquid();
+    }
+
+    private boolean shouldMoveHerdAwayFromWater(HerdCluster cluster) {
+      if (cluster == null || cluster.members.isEmpty()) {
+        return false;
+      }
+      int count = 0;
+      int inWater = 0;
+      for (Mob member : cluster.members) {
+        if (member == null || !member.isValid()) {
+          continue;
+        }
+        count++;
+        if (isInWater(member)) {
+          inWater++;
+        }
+      }
+      return count > 0 && inWater > count / 2;
+    }
+
+    private Location resolveDryTarget(Location origin, double awareness) {
+      if (origin == null || awareness <= 0.0) {
+        return origin;
+      }
+      World world = origin.getWorld();
+      if (world == null) {
+        return origin;
+      }
+      double originX = origin.getX();
+      double originZ = origin.getZ();
+      double y = origin.getY();
+      int samples = 12;
+      Location best = null;
+      int bestScore = Integer.MIN_VALUE;
+      for (int i = 0; i < samples; i++) {
+        double angle = (Math.PI * 2.0) * i / samples;
+        int x = (int) Math.round(originX + Math.cos(angle) * awareness);
+        int z = (int) Math.round(originZ + Math.sin(angle) * awareness);
+        Location candidate = new Location(world, x, y, z);
+        int score = 0;
+        if (!isInWaterAt(world, candidate)) {
+          score += 2;
+        }
+        if (isWalkableSurface(world, candidate)) {
+          score += 2;
+        }
+        score -= hazardManager.scoreAt(candidate);
+        if (score > bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
+      }
+      return best;
+    }
+
+    private boolean isInWaterAt(World world, Location location) {
+      if (world == null || location == null) {
+        return false;
+      }
+      var block = world.getBlockAt(location);
+      return block.isLiquid()
+          || block.getRelative(org.bukkit.block.BlockFace.DOWN).isLiquid();
     }
 
     private boolean isOnNaturalSurface(Location location) {
@@ -1462,13 +1801,16 @@ public final class TrophicHerds extends JavaPlugin {
         HerdCluster cluster,
         UUID leaderId,
         int removals,
-        int minHerdSize,
+        MobSettings settings,
         Map<Biome, Integer> biomeCounts,
         Map<Long, Integer> chunkCounts) {
       if (removals <= 0 || cluster.members.isEmpty()) {
         return 0;
       }
+      int minHerdSize = settings.minHerdSize;
+      int minBiomePopulation = settings.minBiomePopulation;
       List<Mob> candidates = new ArrayList<>();
+      List<Mob> adultCandidates = new ArrayList<>();
       for (Mob member : cluster.members) {
         if (member == null || !member.isValid()) {
           continue;
@@ -1477,6 +1819,9 @@ public final class TrophicHerds extends JavaPlugin {
           continue;
         }
         candidates.add(member);
+        if (member instanceof Ageable ageable && ageable.isAdult()) {
+          adultCandidates.add(member);
+        }
       }
       if (candidates.isEmpty()
           && leaderId != null
@@ -1484,24 +1829,37 @@ public final class TrophicHerds extends JavaPlugin {
         for (Mob member : cluster.members) {
           if (member != null && member.isValid() && leaderId.equals(member.getUniqueId())) {
             candidates.add(member);
+            if (member instanceof Ageable ageable && ageable.isAdult()) {
+              adultCandidates.add(member);
+            }
             break;
           }
         }
       }
+      List<Mob> preferredCandidates = adultCandidates.isEmpty() ? candidates : adultCandidates;
       int removed = 0;
-      while (removed < removals && cluster.members.size() > minHerdSize && !candidates.isEmpty()) {
-        int index = random.nextInt(candidates.size());
-        Mob target = candidates.remove(index);
+      while (removed < removals
+          && cluster.members.size() > minHerdSize
+          && !preferredCandidates.isEmpty()) {
+        int index = random.nextInt(preferredCandidates.size());
+        Mob target = preferredCandidates.remove(index);
         if (target == null || !target.isValid()) {
           continue;
         }
         Location location = target.getLocation();
         Biome biome = location.getBlock().getBiome();
+        int biomeCount = biomeCounts.getOrDefault(biome, 0);
+        if (minBiomePopulation > 0 && biomeCount <= minBiomePopulation) {
+          continue;
+        }
+        if (settings.cullPlayDeathSound) {
+          playCullDeathSound(target, location);
+        }
         biomeCounts.computeIfPresent(biome, (key, value) -> Math.max(0, value - 1));
         var chunk = location.getChunk();
         long key = chunkKey(chunk.getX(), chunk.getZ());
         chunkCounts.computeIfPresent(key, (k, value) -> Math.max(0, value - 1));
-        target.remove();
+        cullMob(target);
         cluster.members.remove(target);
         removed++;
       }
@@ -1532,6 +1890,61 @@ public final class TrophicHerds extends JavaPlugin {
         return true;
       }
       return false;
+    }
+
+    private void cullMob(Mob target) {
+      if (target == null || !target.isValid()) {
+        return;
+      }
+      if (target instanceof LivingEntity living) {
+        living.setSilent(true);
+        living.setMetadata(CULL_METADATA_KEY, new FixedMetadataValue(TrophicHerds.this, true));
+        double health = living.getHealth();
+        if (health <= 0.0) {
+          living.remove();
+        } else {
+          living.setHealth(0.0);
+        }
+      } else {
+        target.remove();
+      }
+    }
+
+    private void playCullDeathSound(Mob target, Location location) {
+      if (target == null || location == null) {
+        return;
+      }
+      World world = location.getWorld();
+      if (world == null) {
+        return;
+      }
+      Sound sound = resolveDeathSound(target.getType());
+      if (sound == null) {
+        return;
+      }
+      double radiusSq = CULL_DEATH_SOUND_RADIUS * CULL_DEATH_SOUND_RADIUS;
+      for (Player player : world.getPlayers()) {
+        if (player.getLocation().distanceSquared(location) <= radiusSq) {
+          player.playSound(location, sound, SoundCategory.NEUTRAL, 1.0f, 1.0f);
+        }
+      }
+    }
+
+    private Sound resolveDeathSound(EntityType type) {
+      if (type == null) {
+        return null;
+      }
+      return switch (type) {
+        case CHICKEN -> Sound.ENTITY_CHICKEN_DEATH;
+        case COW -> Sound.ENTITY_COW_DEATH;
+        case GOAT -> Sound.ENTITY_GOAT_DEATH;
+        case HORSE -> Sound.ENTITY_HORSE_DEATH;
+        case PIG -> Sound.ENTITY_PIG_DEATH;
+        case RABBIT -> Sound.ENTITY_RABBIT_DEATH;
+        case SHEEP -> Sound.ENTITY_SHEEP_DEATH;
+        case OCELOT -> Sound.ENTITY_OCELOT_DEATH;
+        default -> Sound.ENTITY_GENERIC_DEATH;
+      };
     }
 
     List<HerdSnapshot> getHerdSnapshots(
@@ -1648,6 +2061,261 @@ public final class TrophicHerds extends JavaPlugin {
     }
   }
 
+  private final class HazardManager {
+    private static final int REGION_CHUNK_SIZE = 4;
+    private static final int REGION_BLOCK_SIZE = REGION_CHUNK_SIZE * 16;
+    private static final int SAMPLE_SPACING = 8;
+    private static final int GRID_SIZE = REGION_BLOCK_SIZE / SAMPLE_SPACING;
+    private static final int REGION_CACHE_MAX_ENTRIES = 512;
+    private static final int REGION_STALE_TICKS = 20 * 60;
+    private static final int REGION_REFRESH_BATCH = 2;
+    private static final int CLIFF_HEIGHT_DELTA = 4;
+    private static final int CAVE_SAMPLE_DEPTH_MIN = 6;
+    private static final int CAVE_SAMPLE_DEPTH_MAX = 14;
+    private static final int MUST_AVOID_SCORE = 100;
+    private static final int CAVE_SCORE = 20;
+
+    private final Map<RegionKey, RegionHazardMap> cache = new HashMap<>();
+    private final Deque<RegionKey> refreshQueue = new ArrayDeque<>();
+    private final java.util.Set<RegionKey> queuedRegions = new java.util.HashSet<>();
+
+    private void refreshCaches() {
+      int currentTick = Bukkit.getCurrentTick();
+      for (World world : Bukkit.getWorlds()) {
+        for (Chunk chunk : world.getLoadedChunks()) {
+          RegionKey key = RegionKey.fromChunk(world, chunk.getX(), chunk.getZ());
+          RegionHazardMap existing = cache.get(key);
+          if (existing == null || currentTick - existing.lastUpdatedTick > REGION_STALE_TICKS) {
+            enqueueRegion(key);
+          }
+        }
+      }
+      for (int i = 0; i < REGION_REFRESH_BATCH; i++) {
+        RegionKey key = refreshQueue.pollFirst();
+        if (key == null) {
+          break;
+        }
+        queuedRegions.remove(key);
+        World world = Bukkit.getWorld(key.worldId);
+        if (world == null) {
+          continue;
+        }
+        RegionHazardMap refreshed = buildRegionHazardMap(world, key, currentTick);
+        cache.put(key, refreshed);
+      }
+      pruneCache(currentTick);
+    }
+
+    private void enqueueRegion(RegionKey key) {
+      if (key == null) {
+        return;
+      }
+      if (queuedRegions.add(key)) {
+        refreshQueue.addLast(key);
+      }
+    }
+
+    private int scoreAt(Location location) {
+      if (location == null) {
+        return 0;
+      }
+      World world = location.getWorld();
+      if (world == null) {
+        return 0;
+      }
+      int currentTick = Bukkit.getCurrentTick();
+      RegionKey key = RegionKey.fromBlock(world, location.getBlockX(), location.getBlockZ());
+      RegionHazardMap map = cache.get(key);
+      if (map == null || currentTick - map.lastUpdatedTick > REGION_STALE_TICKS) {
+        map = buildRegionHazardMap(world, key, currentTick);
+        cache.put(key, map);
+      }
+      map.lastAccessTick = currentTick;
+      return map.scoreAt(location.getBlockX(), location.getBlockZ());
+    }
+
+    private void pruneCache(int currentTick) {
+      int max = REGION_CACHE_MAX_ENTRIES;
+      if (cache.size() <= max) {
+        return;
+      }
+      List<RegionHazardMap> maps = new ArrayList<>(cache.values());
+      maps.sort((a, b) -> Integer.compare(a.lastAccessTick, b.lastAccessTick));
+      int removeCount = Math.max(0, cache.size() - max);
+      for (int i = 0; i < removeCount && i < maps.size(); i++) {
+        cache.remove(maps.get(i).key);
+      }
+      cache.values().removeIf(map -> currentTick - map.lastAccessTick > REGION_STALE_TICKS * 2);
+    }
+
+    private RegionHazardMap buildRegionHazardMap(
+        World world,
+        RegionKey key,
+        int currentTick) {
+      int originX = key.regionX * REGION_BLOCK_SIZE;
+      int originZ = key.regionZ * REGION_BLOCK_SIZE;
+      int[][] heights = new int[GRID_SIZE][GRID_SIZE];
+      boolean[][] water = new boolean[GRID_SIZE][GRID_SIZE];
+      boolean[][] cave = new boolean[GRID_SIZE][GRID_SIZE];
+      for (int gx = 0; gx < GRID_SIZE; gx++) {
+        for (int gz = 0; gz < GRID_SIZE; gz++) {
+          int sampleX = originX + gx * SAMPLE_SPACING + SAMPLE_SPACING / 2;
+          int sampleZ = originZ + gz * SAMPLE_SPACING + SAMPLE_SPACING / 2;
+          int surfaceY = world.getHighestBlockYAt(
+              sampleX,
+              sampleZ,
+              HeightMap.MOTION_BLOCKING_NO_LEAVES);
+          heights[gx][gz] = surfaceY;
+          var surfaceBlock = world.getBlockAt(sampleX, surfaceY, sampleZ);
+          boolean isWater = surfaceBlock.getType() == Material.WATER;
+          if (!isWater) {
+            var below = world.getHighestBlockAt(sampleX, sampleZ, HeightMap.OCEAN_FLOOR);
+            var above = below.getRelative(org.bukkit.block.BlockFace.UP);
+            isWater = above.getType() == Material.WATER;
+          }
+          water[gx][gz] = isWater;
+          cave[gx][gz] = isCaveSample(world, sampleX, surfaceY, sampleZ);
+        }
+      }
+      byte[] scores = new byte[GRID_SIZE * GRID_SIZE];
+      for (int gx = 0; gx < GRID_SIZE; gx++) {
+        for (int gz = 0; gz < GRID_SIZE; gz++) {
+          int maxDelta = 0;
+          int base = heights[gx][gz];
+          if (gx > 0) {
+            maxDelta = Math.max(maxDelta, Math.abs(base - heights[gx - 1][gz]));
+          }
+          if (gx + 1 < GRID_SIZE) {
+            maxDelta = Math.max(maxDelta, Math.abs(base - heights[gx + 1][gz]));
+          }
+          if (gz > 0) {
+            maxDelta = Math.max(maxDelta, Math.abs(base - heights[gx][gz - 1]));
+          }
+          if (gz + 1 < GRID_SIZE) {
+            maxDelta = Math.max(maxDelta, Math.abs(base - heights[gx][gz + 1]));
+          }
+          boolean cliff = maxDelta >= CLIFF_HEIGHT_DELTA;
+          int score = 0;
+          if (water[gx][gz]) {
+            score += MUST_AVOID_SCORE;
+          }
+          if (cliff) {
+            score += MUST_AVOID_SCORE;
+          }
+          if (cave[gx][gz]) {
+            score += CAVE_SCORE;
+          }
+          scores[gx + gz * GRID_SIZE] = (byte) Math.min(127, score);
+        }
+      }
+      return new RegionHazardMap(
+          key,
+          originX,
+          originZ,
+          SAMPLE_SPACING,
+          scores,
+          currentTick);
+    }
+
+    private boolean isCaveSample(World world, int x, int surfaceY, int z) {
+      int minY = surfaceY - CAVE_SAMPLE_DEPTH_MIN;
+      int maxY = surfaceY - CAVE_SAMPLE_DEPTH_MAX;
+      if (minY <= 0 || maxY <= 0) {
+        return false;
+      }
+      for (int y = minY; y >= maxY; y -= 4) {
+        var block = world.getBlockAt(x, y, z);
+        if (block.getType() != Material.AIR) {
+          continue;
+        }
+        var above = block.getRelative(org.bukkit.block.BlockFace.UP);
+        if (above.getType().isSolid()) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
+
+  private static final class RegionHazardMap {
+    private final RegionKey key;
+    private final int originX;
+    private final int originZ;
+    private final int spacing;
+    private final byte[] scores;
+    private int lastUpdatedTick;
+    private int lastAccessTick;
+
+    private RegionHazardMap(
+        RegionKey key,
+        int originX,
+        int originZ,
+        int spacing,
+        byte[] scores,
+        int currentTick) {
+      this.key = key;
+      this.originX = originX;
+      this.originZ = originZ;
+      this.spacing = spacing;
+      this.scores = scores;
+      this.lastUpdatedTick = currentTick;
+      this.lastAccessTick = currentTick;
+    }
+
+    private int scoreAt(int blockX, int blockZ) {
+      int gx = (blockX - originX) / spacing;
+      int gz = (blockZ - originZ) / spacing;
+      if (gx < 0 || gz < 0 || gx >= HazardManager.GRID_SIZE || gz >= HazardManager.GRID_SIZE) {
+        return 0;
+      }
+      int idx = gx + gz * HazardManager.GRID_SIZE;
+      return scores[idx];
+    }
+  }
+
+  private static final class RegionKey {
+    private final UUID worldId;
+    private final int regionX;
+    private final int regionZ;
+
+    private RegionKey(UUID worldId, int regionX, int regionZ) {
+      this.worldId = worldId;
+      this.regionX = regionX;
+      this.regionZ = regionZ;
+    }
+
+    private static RegionKey fromChunk(World world, int chunkX, int chunkZ) {
+      int regionX = Math.floorDiv(chunkX, HazardManager.REGION_CHUNK_SIZE);
+      int regionZ = Math.floorDiv(chunkZ, HazardManager.REGION_CHUNK_SIZE);
+      return new RegionKey(world.getUID(), regionX, regionZ);
+    }
+
+    private static RegionKey fromBlock(World world, int blockX, int blockZ) {
+      int regionX = Math.floorDiv(blockX, HazardManager.REGION_BLOCK_SIZE);
+      int regionZ = Math.floorDiv(blockZ, HazardManager.REGION_BLOCK_SIZE);
+      return new RegionKey(world.getUID(), regionX, regionZ);
+    }
+
+    @Override
+    public boolean equals(Object other) {
+      if (this == other) {
+        return true;
+      }
+      if (!(other instanceof RegionKey that)) {
+        return false;
+      }
+      return regionX == that.regionX && regionZ == that.regionZ && worldId.equals(that.worldId);
+    }
+
+    @Override
+    public int hashCode() {
+      int result = worldId.hashCode();
+      result = 31 * result + regionX;
+      result = 31 * result + regionZ;
+      return result;
+    }
+  }
+
   private static final class PredatorChunkCache {
     private final List<Entity> entities;
     private final int lastScanTick;
@@ -1696,6 +2364,19 @@ public final class TrophicHerds extends JavaPlugin {
   }
 
   private final class PredatorListener implements Listener {
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerToggleSprint(PlayerToggleSprintEvent event) {
+      if (event == null) {
+        return;
+      }
+      Player player = event.getPlayer();
+      if (player == null) {
+        return;
+      }
+      var chunk = player.getLocation().getChunk();
+      herdManager.invalidatePredatorChunk(player.getWorld(), chunk.getX(), chunk.getZ());
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntityBreed(EntityBreedEvent event) {
       if (settings == null || event == null) {
@@ -1768,6 +2449,19 @@ public final class TrophicHerds extends JavaPlugin {
           predator.getLocation(),
           config.settings,
           Bukkit.getCurrentTick());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onEntityDeath(EntityDeathEvent event) {
+      if (settings == null || event == null) {
+        return;
+      }
+      LivingEntity entity = event.getEntity();
+      if (entity == null || !entity.hasMetadata(CULL_METADATA_KEY)) {
+        return;
+      }
+      event.getDrops().clear();
+      event.setDroppedExp(0);
     }
 
     private MobTypeConfig<? extends Mob> findPreyConfig(
