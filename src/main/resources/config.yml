@@ -1,6 +1,3 @@
-debug: true
-
-debug: false
 mobs:
   chicken:
     awareness: 16
@@ -13,6 +10,7 @@ mobs:
     panic-range: 10
     night-herd-radius-multiplier: 0.25
     night-herd-speed-multiplier: 0.25
+    day-herd-speed-multiplier: 0.65
     predators:
     - ZOMBIE
     - SKELETON
@@ -25,19 +23,22 @@ mobs:
     - FOX
     graze-crops:
     - WHEAT
-    graze-frequency: 6000
+    graze-frequency: 3300
     soft-cap-per-biome: 40
     soft-cap-per-chunk: 10
     min-herd-size: 2
+    min-biome-population: 4
+    cull-play-death-sound: true
     density-throttle-threshold: 14   # Min herd size before density throttling (culling) can occur
     density-throttle-chance-per-mob: 0.05 # Chance per mob to be culled when density throttling occurs
     density-throttle-max-chance: 0.1 # Max chance to be culled when density throttling occurs (caps at this chance even if herd size is much higher than threshold)
     reproduce: true
+    reproduce-needs-water: true
     reproduce-spacing: 3
     reproduce-rate: 0.25
-    reproduce-cooldown-ticks: 12000
+    reproduce-cooldown-ticks: 9000
     max-herds-per-biome: 3
-    overcap-interval-ticks: 2000
+    overcap-interval-ticks: 6104
     overcap-removals-per-interval: 2
   cow:
     awareness: 24
@@ -50,6 +51,7 @@ mobs:
     panic-range: 12
     night-herd-radius-multiplier: 0.35
     night-herd-speed-multiplier: 0.5
+    day-herd-speed-multiplier: 0.45
     predators:
     - ZOMBIE
     - SKELETON
@@ -62,17 +64,237 @@ mobs:
     - FOX
     graze-crops:
     - WHEAT
-    graze-frequency: 6000
+    - HAY_BLOCK
+    graze-frequency: 4800
     soft-cap-per-biome: 40
     soft-cap-per-chunk: 10
     min-herd-size: 2
+    min-biome-population: 4
+    cull-play-death-sound: true
     density-throttle-threshold: 14   # Min herd size before density throttling (culling) can occur
     density-throttle-chance-per-mob: 0.05 # Chance per mob to be culled when density throttling occurs
     density-throttle-max-chance: 0.1 # Max chance to be culled when density throttling occurs (caps at this chance even if herd size is much higher than threshold)
     reproduce: true
+    reproduce-needs-water: true
     reproduce-spacing: 3
     reproduce-rate: 0.25
     reproduce-cooldown-ticks: 12000
     max-herds-per-biome: 3
-    overcap-interval-ticks: 2000
+    overcap-interval-ticks: 8123
+    overcap-removals-per-interval: 2
+  pig:
+    awareness: 24
+    herd-tightness: 16
+    herd-type: loose
+    flee-mode: scatter
+    flee-speed: 1.0
+    panic-speed: 1.2
+    flee-range: 18
+    panic-range: 12
+    night-herd-radius-multiplier: 0.35
+    night-herd-speed-multiplier: 0.5
+    day-herd-speed-multiplier: 0.45
+    predators:
+    - ZOMBIE
+    - CREEPER
+    - SPIDER
+    - PILLAGER
+    - VILLAGER
+    - PLAYER
+    - WOLF
+    graze-crops:
+    - WHEAT
+    - CARROTS
+    - POTATOES
+    - BEETROOTS
+    - MELON
+    - PUMPKIN
+    - MUSHROOM
+    - HAY_BLOCK
+    graze-frequency: 576
+    soft-cap-per-biome: 30
+    soft-cap-per-chunk: 7
+    min-herd-size: 2
+    min-biome-population: 4
+    cull-play-death-sound: true
+    density-throttle-threshold: 11   # Min herd size before density throttling (culling) can occur
+    density-throttle-chance-per-mob: 0.05 # Chance per mob to be culled when density throttling occurs
+    density-throttle-max-chance: 0.1 # Max chance to be culled when density throttling occurs (caps at this chance even if herd size is much higher than threshold)
+    reproduce: true
+    reproduce-needs-water: true
+    reproduce-spacing: 3
+    reproduce-rate: 0.25
+    reproduce-cooldown-ticks: 16000
+    max-herds-per-biome: 3
+    overcap-interval-ticks: 11620
+    overcap-removals-per-interval: 2
+  sheep:
+    awareness: 20
+    herd-tightness: 6
+    herd-type: tight
+    flee-mode: scatter
+    flee-speed: 1.1
+    panic-speed: 1.6
+    flee-range: 12
+    panic-range: 7
+    night-herd-radius-multiplier: 0.35
+    night-herd-speed-multiplier: 0.5
+    day-herd-speed-multiplier: 0.45
+    predators:
+    - ZOMBIE
+    - SKELETON
+    - CREEPER
+    - SPIDER
+    - PILLAGER
+    - VILLAGER
+    - PLAYER
+    - WOLF
+    - FOX
+    graze-crops:
+    - WHEAT
+    - BEETROOTS
+    - HAY_BLOCK    
+    graze-frequency: 3990
+    soft-cap-per-biome: 33
+    soft-cap-per-chunk: 8
+    min-herd-size: 2
+    min-biome-population: 4
+    cull-play-death-sound: true
+    density-throttle-threshold: 11   # Min herd size before density throttling (culling) can occur
+    density-throttle-chance-per-mob: 0.05 # Chance per mob to be culled when density throttling occurs
+    density-throttle-max-chance: 0.1 # Max chance to be culled when density throttling occurs (caps at this chance even if herd size is much higher than threshold)
+    reproduce: true
+    reproduce-needs-water: true
+    reproduce-spacing: 3
+    reproduce-rate: 0.25
+    reproduce-cooldown-ticks: 15000
+    max-herds-per-biome: 3
+    overcap-interval-ticks: 10095
+    overcap-removals-per-interval: 2
+  horse:
+    awareness: 36
+    herd-tightness: 9
+    herd-type: tight
+    flee-mode: scatter
+    flee-speed: 1.4
+    panic-speed: 1.7
+    flee-range: 22
+    panic-range: 17
+    night-herd-radius-multiplier: 0.35
+    night-herd-speed-multiplier: 0.5
+    day-herd-speed-multiplier: 0.45
+    predators:
+    - ZOMBIE
+    - PILLAGER
+    - VILLAGER
+    - PLAYER
+    graze-crops:
+    - WHEAT
+    - CARROTS
+    - BEETROOTS
+    - HAY_BLOCK
+    graze-frequency: 4800
+    soft-cap-per-biome: 40
+    soft-cap-per-chunk: 10
+    min-herd-size: 2
+    min-biome-population: 4
+    cull-play-death-sound: true
+    density-throttle-threshold: 14   # Min herd size before density throttling (culling) can occur
+    density-throttle-chance-per-mob: 0.05 # Chance per mob to be culled when density throttling occurs
+    density-throttle-max-chance: 0.1 # Max chance to be culled when density throttling occurs (caps at this chance even if herd size is much higher than threshold)
+    reproduce: true
+    reproduce-needs-water: true
+    reproduce-spacing: 3
+    reproduce-rate: 0.25
+    reproduce-cooldown-ticks: 24000
+    max-herds-per-biome: 3
+    overcap-interval-ticks: 16050
+    overcap-removals-per-interval: 2
+  ocelot:
+    awareness: 16
+    herd-tightness: 6
+    herd-type: tight
+    flee-mode: scatter
+    flee-speed: 1.25
+    panic-speed: 1.5
+    flee-range: 13
+    panic-range: 10
+    night-herd-radius-multiplier: 0.25
+    night-herd-speed-multiplier: 0.25
+    day-herd-speed-multiplier: 0.45
+    predators:
+    - ZOMBIE
+    - SKELETON
+    - CREEPER
+    - SPIDER
+    - PILLAGER
+    - VILLAGER
+    - PLAYER
+    - WOLF
+    - FOX
+    graze-crops:
+    graze-frequency: 0
+    soft-cap-per-biome: 15
+    soft-cap-per-chunk: 8
+    min-herd-size: 2
+    min-biome-population: 4
+    cull-play-death-sound: true
+    density-throttle-threshold: 14   # Min herd size before density throttling (culling) can occur
+    density-throttle-chance-per-mob: 0.05 # Chance per mob to be culled when density throttling occurs
+    density-throttle-max-chance: 0.1 # Max chance to be culled when density throttling occurs (caps at this chance even if herd size is much higher than threshold)
+    reproduce: true
+    reproduce-needs-water: true
+    reproduce-spacing: 3
+    reproduce-rate: 0.25
+    reproduce-cooldown-ticks: 6000
+    max-herds-per-biome: 3
+    overcap-interval-ticks: 4150
+    overcap-removals-per-interval: 2
+  rabbit:
+    awareness: 16
+    herd-tightness: 6
+    herd-type: tight
+    flee-mode: scatter
+    flee-speed: 1.25
+    panic-speed: 1.5
+    flee-range: 13
+    panic-range: 10
+    night-herd-radius-multiplier: 0.25
+    night-herd-speed-multiplier: 0.25
+    day-herd-speed-multiplier: 0.45
+    predators:
+    - ZOMBIE
+    - SKELETON
+    - CREEPER
+    - SPIDER
+    - PILLAGER
+    - VILLAGER
+    - PLAYER
+    - WOLF
+    - FOX
+    graze-crops:
+    - WHEAT
+    - CARROTS
+    - POTATOES
+    - BEETROOTS
+    - MELON
+    - PUMPKIN
+    - MUSHROOM
+    - HAY_BLOCK
+    graze-frequency: 2880
+    soft-cap-per-biome: 40
+    soft-cap-per-chunk: 10
+    min-herd-size: 2
+    min-biome-population: 4
+    cull-play-death-sound: true
+    density-throttle-threshold: 14   # Min herd size before density throttling (culling) can occur
+    density-throttle-chance-per-mob: 0.05 # Chance per mob to be culled when density throttling occurs
+    density-throttle-max-chance: 0.1 # Max chance to be culled when density throttling occurs (caps at this chance even if herd size is much higher than threshold)
+    reproduce: true
+    reproduce-needs-water: true
+    reproduce-spacing: 3
+    reproduce-rate: 0.25
+    reproduce-cooldown-ticks: 2000
+    max-herds-per-biome: 3
+    overcap-interval-ticks: 1550
     overcap-removals-per-interval: 2

@@ -1,6 +1,6 @@
 name: TrophicHerds
 main: com.hideyourfire.trophicherds.TrophicHerds
-version: 260.205.17
+version: 260.208.24
 api-version: "1.21"
 commands:
   th:
